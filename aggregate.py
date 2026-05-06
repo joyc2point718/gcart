@@ -232,6 +232,9 @@ def plot_corruption_curves(corr_summary, out_png):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--results-dir", type=str, default="results")
+    p.add_argument("--models", nargs="+", default=None,
+                   help="Optional list of model names to include. "
+                        "If omitted, includes all models found in results-dir.")
     args = p.parse_args()
 
     rows = load_results(args.results_dir)
@@ -239,6 +242,13 @@ def main():
         print(f"No results in {args.results_dir}")
         return
     print(f"Loaded {len(rows)} run(s)")
+    if args.models is not None:
+        before = len(rows)
+        rows = [r for r in rows if r["config"]["model_name"] in args.models]
+        print(f"Filter: kept {len(rows)}/{before} runs matching {args.models}")
+        if not rows:
+            print("No runs left after filtering. Check --models names.")
+            return
 
     clean_summary = aggregate_clean(rows)
     corr_summary = aggregate_corruption(rows)

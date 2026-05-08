@@ -1,117 +1,116 @@
-# GC-ART — Tier-1 experiment package
+# GC-ART
 
-This directory contains the minimum-viable experimental package for the
-GC-ART paper: standardized CIFAR-10-C evaluation, classical and learned
-baselines, three architectural ablations, multi-seed support, and a
-FLOPs/latency benchmark.
+GC-ART is a lightweight, global-curve image enhancement module evaluated on CIFAR-10-C-style corruptions. This repository contains the code for training GC-ART, learned enhancement baselines, fixed-preprocessing baselines, ablations, aggregation scripts, and FLOPs/latency benchmarking.
 
 ## Files
 
+```text
+models.py          # GC-ART variants, Zero-DCE/Zero-DCE++, and ResNet-18 wrappers
+classical.py       # Fixed HE/CLAHE/gamma preprocessing + trained ResNet-18 baselines
+data.py            # CIFAR-10 loader and on-the-fly corruptions
+training.py        # Train/eval loop with seed support and JSON logging
+run_one.py         # CLI entry point for one model/seed run
+run_all.py         # Sequential dispatcher for multi-model/multi-seed sweeps
+flops_benchmark.py # FLOPs and latency benchmark for enhancement modules
+aggregate.py       # Aggregates JSON results into tables and plots
+smoke_test.py      # Quick sanity check
 ```
-models.py          # GC-ART (rational/hardhist/poly/lut) + Zero-DCE/++ + ResNet-18
-classical.py       # HE, CLAHE, gamma preprocessing baselines
-data.py            # HF CIFAR-10 loader + on-the-fly CIFAR-10-C corruptions
-training.py        # train/eval loop with seed support and JSON logging
-run_one.py         # CLI entry: one (model, seed). For SLURM array jobs.
-run_all.py         # Sequential dispatcher (alternative to SLURM)
-flops_benchmark.py # FLOPs + wall-clock latency across resolutions
-aggregate.py       # Multi-seed aggregation -> markdown tables + plots
-smoke_test.py      # 30-second sanity check; run this first
-submit_slurm.sh    # SLURM array template (39 jobs = 13 models * 3 seeds)
+
+## Installation
+
+Create a Python environment and install the dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+Then run the smoke test:
+
+```bash
+python smoke_test.py
 ```
 
 ## Quickstart
 
+Run one short training job:
+
 ```bash
-# 1. Sanity check (CPU is fine here)
+python run_one.py --model gcart --seed 42 --epochs 2 --batch-size 128 --num-workers 0 --no-compile
+```
+
+Run a small end-to-end reproducibility check:
+
+```bash
+mkdir -p results
 python smoke_test.py
+python run_one.py --model baseline --seed 0 --epochs 1 --batch-size 128 --num-workers 0 --no-compile
+python run_one.py --model gcart --seed 0 --epochs 1 --batch-size 128 --num-workers 0 --no-compile
+python aggregate.py --results-dir results
+python flops_benchmark.py --resolutions 32 --iters 2 --warmup 1 --device cpu
+```
 
-# 2. Single config, mostly to verify training works
-python run_one.py --model gcart --seed 42 --epochs 2
+Run the full sequential sweep:
 
-# 3. FLOPs/latency benchmark (works without datasets)
-python flops_benchmark.py --resolutions 32 256 1024 2048 4096
-
-# 4. Full sweep, sequentially:
+```bash
 python run_all.py --seeds 42 43 44 --epochs 100
-
-# 5. After all results files are present:
 python aggregate.py --results-dir results
 ```
 
-## SLURM dispatch
-
-```bash
-mkdir -p logs results
-sbatch submit_slurm.sh                # runs all 13 models x 3 seeds
-sbatch --array=0-2 submit_slurm.sh    # just GC-ART (3 seeds) for quick test
-```
-
-The SLURM script's `--array=0-38` maps task IDs to (model, seed) pairs.
-After all jobs finish, run `python aggregate.py` to produce the paper
-tables and plots from the per-job JSON files.
-
 ## Outputs
 
-Each `run_one.py` invocation produces `results/<model>_s<seed>.json`
-containing:
-- the full training history (loss, clean accuracy per epoch)
-- the final clean accuracy
-- the final accuracy on every (corruption, severity) pair
-- parameter count and elapsed time
+Each `run_one.py` invocation writes a JSON file under `results/`, containing the training history, final clean accuracy, corruption accuracies, parameter count, and elapsed time.
 
-After running `aggregate.py`:
+After running `aggregate.py`, the `results/` directory should contain summary tables and plots, including:
 
+```text
+results/table_main.md
+results/table_severities.md
+results/learning_curves.png
+results/corruption_curves.png
 ```
-results/table_main.md          # one-row-per-model summary
-results/table_severities.md    # detailed per-severity numbers
-results/learning_curves.png    # mean +/- std training curves
-results/corruption_curves.png  # accuracy vs severity, three subplots
+
+## Baselines
+
+This package includes:
+
+- GC-ART and architectural ablations
+- Zero-DCE and Zero-DCE++ learned enhancement baselines
+- Fixed preprocessing baselines: histogram equalization, CLAHE, and gamma correction
+
+For the fixed preprocessing baselines, the preprocessing operation is fixed/parameter-free, but the downstream ResNet-18 classifier is still trained. They should therefore be described as “fixed preprocessing + trained ResNet-18” baselines rather than fully parameter-free systems.
+
+## FLOPs and latency benchmark
+
+Run:
+
+```bash
+python flops_benchmark.py --resolutions 32 256 1024 2048 --device cpu
 ```
+
+or, on a CUDA machine:
+
+```bash
+python flops_benchmark.py --resolutions 32 256 1024 2048 --device cuda
+```
+
+The benchmark reports enhancer-only costs, excluding the ResNet-18 classifier that is shared across configurations.
 
 ## Hardware notes
 
-The script auto-detects bf16 vs fp16:
-- Ampere/Hopper (A100, H100, RTX 30xx/40xx) -> bfloat16, no GradScaler
-- Turing/Volta (TITAN RTX, V100, RTX 20xx) -> float16 + GradScaler
+If `torch.compile` causes issues on your PyTorch version or GPU, pass:
 
-If `torch.compile` causes issues (older PyTorch, exotic backbones), pass
-`--no-compile` to `run_one.py`.
+```bash
+--no-compile
+```
 
-## Expected runtime per config
+to `run_one.py`.
 
-ResNet-18 / CIFAR-10 / 100 epochs / batch 1024:
-- A100:        ~12-18 minutes
-- TITAN RTX:   ~25-35 minutes
-- 3090 / 4090: ~10-15 minutes
+## Caveats
 
-Tier 1 is 13 models * 3 seeds = 39 runs. On an A100 with 4 parallel jobs
-that's roughly 2-3 hours of wall-clock time end to end.
+- CIFAR-10 is only 32x32. The resolution-scaling argument is most visible in the FLOPs/latency benchmark.
+- CIFAR-10-C brightness corruption increases brightness; contrast and the custom darken corruption better test low-light behavior.
+- FLOPs in `flops_benchmark.py` are approximate analytical/hook-based estimates intended for comparison between enhancement modules, not a replacement for profiler-level hardware analysis.
 
-## What this package covers (Tier 1)
+## License
 
-- [x] CIFAR-10-C-style brightness, contrast, darken corruptions
-      (computed on-the-fly; no 2.5GB download required)
-- [x] Multiple seeds with mean/std reporting
-- [x] HE / CLAHE / gamma classical baselines
-- [x] Zero-DCE and Zero-DCE++ learned baselines
-- [x] Soft-vs-hard histogram ablation
-- [x] Rational vs polynomial vs LUT curve-family ablation
-- [x] Monotonicity-penalty on/off ablation
-- [x] FLOPs and latency benchmark across 32 -> 4096 px
-
-## Honest caveats to put in the paper
-
-1. The "param-estimation MACs" stat is ~10^3, but the *total* per-image
-   compute is dominated by the pixel-wise histogram (O(HWK)) and curve
-   application (O(HW)). At 1024^2 GC-ART totals ~274M FLOPs vs Zero-DCE++'s
-   ~1.95G — a meaningful ~7x advantage, but not the 10^4 reduction the
-   v1 manuscript claimed.
-
-2. Brightness corruption in CIFAR-10-C *increases* brightness; only
-   contrast and the custom darken corruption test the low-light setting.
-   Report all three.
-
-3. CIFAR-10 is 32x32. The O(K)-vs-O(HWK) story is most visible at higher
-   resolution; the FLOPs benchmark exists specifically to make that
-   visible without needing a higher-res classification dataset.
+This code is released under the MIT License. See `LICENSE`.

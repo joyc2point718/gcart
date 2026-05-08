@@ -1,0 +1,7 @@
+torch>=2.1
+torchvision>=0.16
+numpy>=1.24
+datasets>=2.18
+matplotlib>=3.7
+opencv-python>=4.8
+tqdm>=4.66
